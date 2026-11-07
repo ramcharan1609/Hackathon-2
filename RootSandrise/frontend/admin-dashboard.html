@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Admin Dashboard | CleanMap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+* { margin:0; padding:0; box-sizing:border-box; font-family:'Poppins', sans-serif; }
+body { background: linear-gradient(135deg, #11998e, #38ef7d); min-height:100vh; }
+
+header { background:#fff; padding:15px 50px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 10px rgba(0,0,0,0.1);}
+header h1 { color:#1b5e20; }
+nav a { margin-left:20px; text-decoration:none; color:#333; font-weight:500; }
+nav a:hover { color:#1b5e20; }
+
+.container { max-width:1200px; margin:35px auto; background:#fff; padding:30px; border-radius:18px; box-shadow:0 15px 30px rgba(0,0,0,0.2);}
+.container h2 { color:#1b5e20; margin-bottom:10px; }
+.container p { color:#555; margin-bottom:25px; }
+
+.report { border:1px solid #ddd; border-radius:15px; padding:20px; margin-bottom:20px; display:grid; grid-template-columns:1fr 2fr 1fr; gap:20px; }
+.report img { width:100%; border-radius:10px; }
+.report-details h4 { color:#1b5e20; margin-bottom:8px; }
+.report-details p { font-size:0.9rem; margin-bottom:5px; }
+.status { display:inline-block; padding:6px 14px; border-radius:20px; color:white; font-size:0.8rem; margin-bottom:10px; }
+.in-progress { background:#f9a825; } .resolved { background:#2e7d32; }
+
+.actions button { display:block; width:100%; margin-bottom:10px; padding:10px; border:none; border-radius:20px; cursor:pointer; font-size:0.85rem; }
+.verify-btn { background:#2e7d32; color:#fff; } .clean-btn { background:#1565c0; color:#fff; }
+.verify-btn:hover { background:#1b5e20; } .clean-btn:hover { background:#0d47a1; }
+
+#map { height:400px; border-radius:15px; margin-top:20px; }
+
+footer { background:#1b5e20; color:white; text-align:center; padding:15px; margin-top:40px; font-size:0.85rem; }
+@media (max-width:900px) { .report { grid-template-columns:1fr; } }
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>CleanMap Admin</h1>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="analytics.html">Analytics</a>
+        <a href="login.html" onclick="logout()">Logout</a>
+    </nav>
+</header>
+
+<div class="container">
+    <h2>Waste Reports with Map</h2>
+    <p>Click a report to see its location on the map. Repeated reports automatically form hotspots.</p>
+
+    <!-- REPORTS -->
+    <div id="reports"></div>
+
+    <!-- MAP -->
+    <div id="map"></div>
+</div>
+
+<footer>
+    © 2026 CleanMap | Admin Waste Monitoring System
+</footer>
+
+<script src="js/api.js"></script>
+<script>
+let reports = [];
+let map;
+
+async function loadAdminData() {
+    try {
+        const userStr = localStorage.getItem('user');
+        if (!userStr) {
+            window.location.href = 'login.html';
+            return;
+        }
+        
+        const user = JSON.parse(userStr);
+        if (user.role !== 'admin') {
+            window.location.href = 'user-dashboard.html';
+            return;
+        }
+        
+        await loadReports();
+        initializeMap();
+    } catch (error) {
+        console.error('Error loading admin data:', error);
+    }
+}
+
+async function loadReports() {
+    try {
+        const response = await api.getAdminReports();
+        if (response.success) {
+            reports = response.reports;
+            displayReports();
+        }
+    } catch (error) {
+        console.error('Error loading reports:', error);
+        document.getElementById('reports').innerHTML = '<p>Error loading reports. Please try again.</p>';
+    }
+}
+
+function displayReports() {
+    const reportsContainer = document.getElementById("reports");
+    
+    if (reports.length === 0) {
+        reportsContainer.innerHTML = '<p>No reports found.</p>';
+        return;
+    }
+    
+    reportsContainer.innerHTML = '';
+    reports.forEach(report => {
+        const div = document.createElement("div");
+        div.className = "report";
+        div.innerHTML = `
+            ${report.imageUrl ? `<img src="${report.imageUrl}" alt="Waste Image">` : '<div style="width:100%; height:150px; background:#f0f0f0; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#666;">No Image</div>'}
+            <div class="report-details">
+                <h4>${report.wasteType.charAt(0).toUpperCase() + report.wasteType.slice(1)} Waste</h4>
+                <p><strong>Location:</strong> ${report.location}</p>
+                <p><strong>Reported On:</strong> ${new Date(report.reportedAt).toLocaleDateString()}</p>
+                <p><strong>Quantity:</strong> ${report.quantity}</p>
+                ${report.description ? `<p><strong>Description:</strong> ${report.description}</p>` : ''}
+                <p><strong>Reported by:</strong> ${report.user.name}</p>
+                <span class="status ${report.status}" id="status${report._id}">${report.status.charAt(0).toUpperCase() + report.status.slice(1).replace('-', ' ')}</span>
+            </div>
+            <div class="actions">
+                <button onclick="showOnMap(${report.latitude}, ${report.longitude})">View on Map</button>
+                <button class="verify-btn" onclick="updateStatus('${report._id}', 'in-progress', this)">In Progress</button>
+                <button class="clean-btn" onclick="updateStatus('${report._id}', 'resolved', this)">Mark Resolved</button>
+            </div>
+        `;
+        reportsContainer.appendChild(div);
+    });
+}
+
+function initializeMap() {
+    map = L.map('map').setView([17.385, 78.486], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    
+    updateMapMarkers();
+}
+
+function updateMapMarkers() {
+    if (!map) return;
+    
+    map.eachLayer(layer => {
+        if (layer instanceof L.Marker) {
+            map.removeLayer(layer);
+        }
+    });
+    
+    const hotspots = {};
+    reports.forEach(r => {
+        const key = r.lat + "," + r.lng;
+        if (!hotspots[key]) hotspots[key] = {lat:r.lat, lng:r.lng, count:0, reports:[]};
+        hotspots[key].count++;
+        hotspots[key].reports.push(r);
+    });
+    
+    for (const key in hotspots) {
+        const h = hotspots[key];
+        const popupContent = h.reports.map(r => 
+            `<div><strong>${r.wasteType}</strong><br>${r.location}<br>Status: ${r.status}</div>`
+        ).join('<hr>');
+        
+        L.marker([h.lat, h.lng]).addTo(map)
+            .bindPopup(`<strong>Reports: ${h.count}</strong><hr>${popupContent}`);
+    }
+}
+
+function showOnMap(lat, lng) {
+    if (map) {
+        map.setView([lat, lng], 16);
+    }
+}
+
+async function updateStatus(reportId, newStatus, btn) {
+    try {
+        await api.updateReportStatus(reportId, newStatus);
+        
+        const statusSpan = document.getElementById("status" + reportId);
+        statusSpan.className = `status ${newStatus}`;
+        statusSpan.innerText = newStatus.charAt(0).toUpperCase() + newStatus.slice(1).replace('-', ' ');
+        
+        const report = reports.find(r => r._id === reportId);
+        if (report) {
+            report.status = newStatus;
+        }
+        
+        if (newStatus === 'resolved') {
+            btn.remove();
+        } else if (newStatus === 'in-progress') {
+            btn.innerText = 'Mark Resolved';
+            btn.onclick = function() { updateStatus(reportId, 'resolved', btn); };
+        }
+        
+        alert('Report status updated successfully!');
+    } catch (error) {
+        alert('Failed to update status: ' + error.message);
+    }
+}
+
+function logout() {
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    window.location.href = 'login.html';
+}
+
+document.addEventListener('DOMContentLoaded', loadAdminData);
+</script>
+
+</body>
+</html>
